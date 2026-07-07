@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cargando...</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#070a08;
+    --phosphor:#33ff66;
+    --amber:#ffb000;
+    --magenta:#ff2ec4;
+    --cyan:#22e0ff;
+    --glass: rgba(255,255,255,0.04);
+  }
+  *{box-sizing:border-box;}
+  html,body{
+    margin:0; padding:0; width:100%; height:100%;
+    background:var(--bg);
+    overflow:hidden;
+    font-family:'VT323', monospace;
+  }
+  #stage{
+    position:fixed; inset:0;
+    width:100%; height:100%;
+    display:block;
+  }
+  /* Vignette + scanlines = marco de "monitor viejo" */
+  #crt-overlay{
+    position:fixed; inset:0;
+    pointer-events:none;
+    z-index:5;
+    background:
+      repeating-linear-gradient(
+        to bottom,
+        rgba(0,0,0,0) 0px,
+        rgba(0,0,0,0) 2px,
+        rgba(0,0,0,0.18) 3px,
+        rgba(0,0,0,0) 4px
+      );
+    mix-blend-mode:multiply;
+  }
+  #crt-vignette{
+    position:fixed; inset:0;
+    pointer-events:none;
+    z-index:6;
+    background: radial-gradient(ellipse at center, rgba(0,0,0,0) 55%, rgba(0,0,0,0.65) 100%);
+  }
+  #flicker{
+    position:fixed; inset:0;
+    pointer-events:none;
+    z-index:7;
+    background:#fff;
+    opacity:0;
+    animation: powerOn 0.9s ease-out 1;
+  }
+  @keyframes powerOn{
+    0%{opacity:0.9;}
+    8%{opacity:0.05;}
+    12%{opacity:0.5;}
+    20%{opacity:0;}
+    100%{opacity:0;}
+  }
+
+  #hud{
+    position:fixed;
+    inset:0;
+    z-index:10;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    pointer-events:none;
+    text-align:center;
+    gap:18px;
+  }
+  #screen-label{
+    font-family:'Press Start 2P', monospace;
+    font-size:12px;
+    letter-spacing:3px;
+    color:var(--amber);
+    text-shadow:0 0 8px rgba(255,176,0,0.7);
+  }
+  #dots{
+    display:flex; gap:10px;
+  }
+  .dot{
+    width:8px; height:8px; border-radius:50%;
+    background:rgba(255,255,255,0.18);
+    border:1px solid rgba(255,255,255,0.3);
+  }
+  .dot.active{
+    background:var(--phosphor);
+    box-shadow:0 0 8px var(--phosphor);
+    border-color:var(--phosphor);
+  }
+  #countdown{
+    font-family:'Press Start 2P', monospace;
+    font-size:min(20vw, 180px);
+    line-height:1;
+    color:var(--phosphor);
+    text-shadow:
+      0 0 10px rgba(51,255,102,0.8),
+      0 0 30px rgba(51,255,102,0.4);
+    letter-spacing:4px;
+  }
+  #pausemsg{
+    font-size:20px;
+    color:var(--magenta);
+    max-width:80vw;
+    display:none;
+  }
+
+  /* Capa de anuncios: por encima del HUD para que siempre se vean,
+     pero con pointer-events activado SOLO en los slots, no en toda la capa */
+  #ad-layer{
+    position:fixed;
+    inset:0;
+    z-index:15;
+    pointer-events:none;
+  }
+  .ad-slot{
+    position:absolute;
+    pointer-events:auto;
+    background:rgba(0,0,0,0.35);
+    border:1px solid rgba(255,255,255,0.15);
+    border-radius:6px;
+    overflow:hidden;
+    box-shadow:0 0 12px rgba(0,0,0,0.5);
+  }
+  .ad-slot iframe{
+    display:block;
+    border:0;
+  }
+  .ad-top-left{ top:10px; left:10px; }
+  .ad-top-center{ top:10px; left:50%; transform:translateX(-50%); }
+  .ad-top-right{ top:10px; right:10px; }
+  .ad-mid-left{ top:50%; left:10px; transform:translateY(-50%); }
+  .ad-mid-right{ top:50%; right:10px; transform:translateY(-50%); }
+  .ad-bottom-left{ bottom:10px; left:10px; }
+  .ad-bottom-center{ bottom:10px; left:50%; transform:translateX(-50%); }
+  .ad-bottom-right{ bottom:10px; right:10px; }
+  .ad-hidden{ top:0; left:0; width:1px; height:1px; opacity:0; }
+  @media (max-width: 900px){
+    .ad-top-left, .ad-top-center, .ad-top-right{ transform:scale(0.6); transform-origin:top center; }
+    .ad-mid-left{ transform:translateY(-50%) scale(0.55); transform-origin:left center; }
+    .ad-mid-right{ transform:translateY(-50%) scale(0.55); transform-origin:right center; }
+    .ad-bottom-left, .ad-bottom-center, .ad-bottom-right{ transform:scale(0.6); transform-origin:bottom center; }
+    .ad-top-center{ transform:translateX(-50%) scale(0.6); }
+    .ad-bottom-center{ transform:translateX(-50%) scale(0.6); }
+  }
+</style>
+</head>
+<body>
+
+<canvas id="stage"></canvas>
+<div id="crt-overlay"></div>
+<div id="crt-vignette"></div>
+<div id="flicker"></div>
+
+<div id="hud">
+  <div id="screen-label">PANTALLA <span id="stepNum">1</span> DE 5</div>
+  <div id="countdown">11</div>
+  <div id="dots">
+    <div class="dot" data-n="1"></div>
+    <div class="dot" data-n="2"></div>
+    <div class="dot" data-n="3"></div>
+    <div class="dot" data-n="4"></div>
+    <div class="dot" data-n="5"></div>
+  </div>
+  <div id="pausemsg"></div>
+</div>
+
+<div id="ad-layer"></div>
+
+<script>
+/* =========================================================
+   CONFIGURACIÓN PRINCIPAL
+   ========================================================= */
+const TOTAL_SECONDS   = 11;   // duración de cada pantalla
+const TOTAL_STEPS     = 5;    // número total de pantallas en el ciclo
+
+// -------- LINK FINAL: EN PAUSA --------
+// Cuando termina la pantalla 5, si FINAL_REDIRECT_ENABLED es false,
+// el contador se detiene en 0 y NO redirecciona (queda "en pausa").
+// Para activarlo: pon FINAL_REDIRECT_ENABLED = true y coloca tu URL.
+const FINAL_REDIRECT_ENABLED = true;
+const FINAL_REDIRECT_URL     = "https://kairosorenstar-design.github.io/FORMANDO-PALABRAS/";
+/* ========================================================= */
+
+// Lee el paso actual desde la URL (?step=1..5). Si no existe, es 1.
+const params = new URLSearchParams(window.location.search);
+let step = parseInt(params.get('step'), 10);
+if (isNaN(step) || step < 1 || step > TOTAL_STEPS) step = 1;
+
+document.getElementById('stepNum').textContent = step;
+document.querySelectorAll('.dot').forEach(d=>{
+  if (parseInt(d.dataset.n,10) === step) d.classList.add('active');
+});
+
+/* =========================================================
+   CUENTA REGRESIVA
+   ========================================================= */
+let remaining = TOTAL_SECONDS;
+const countdownEl = document.getElementById('countdown');
+countdownEl.textContent = String(remaining).padStart(2,'0');
+
+const timer = setInterval(()=>{
+  remaining--;
+  if (remaining <= 0) {
+    clearInterval(timer);
+    countdownEl.textContent = "00";
+    goNext();
+  } else {
+    countdownEl.textContent = String(remaining).padStart(2,'0');
+  }
+}, 1000);
+
+function goNext(){
+  if (step < TOTAL_STEPS) {
+    const nextStep = step + 1;
+    const url = new URL(window.location.href);
+    url.searchParams.set('step', nextStep);
+    window.location.href = url.toString();
+  } else {
+    // Última pantalla completada
+    if (FINAL_REDIRECT_ENABLED && FINAL_REDIRECT_URL && FINAL_REDIRECT_URL !== "https://tu-link-final-aqui.com") {
+      window.location.href = FINAL_REDIRECT_URL;
+    } else {
+      // EN PAUSA: no redirecciona todavía
+      const msg = document.getElementById('pausemsg');
+      msg.style.display = 'block';
+      msg.textContent = "Enlace final en pausa. Configura FINAL_REDIRECT_URL en el código para activarlo.";
+    }
+  }
+}
+
+/* =========================================================
+   ANUNCIOS (aislados en iframes)
+   -----------------------------------------------------------
+   Los scripts de estas redes usan document.write(), que si se
+   ejecuta fuera de tiempo puede borrar TODA la página (pantalla
+   negra). Por eso cada anuncio se inyecta en su propio iframe:
+   si algo falla, solo afecta ese recuadro, no el resto del sitio.
+   Como la página se recarga completa cada 11s al pasar de paso,
+   los anuncios se vuelven a pedir/mostrar automáticamente.
+   ========================================================= */
+function createAdSlot(position, width, height, innerHTML){
+  const wrapper = document.createElement('div');
+  wrapper.className = 'ad-slot ' + position;
+  wrapper.style.width  = width + 'px';
+  wrapper.style.height = height + 'px';
+
+  const iframe = document.createElement('iframe');
+  iframe.width = width;
+  iframe.height = height;
+  iframe.scrolling = 'no';
+  iframe.setAttribute('frameborder', '0');
+
+  wrapper.appendChild(iframe);
+  document.getElementById('ad-layer').appendChild(wrapper);
+
+  const doc = iframe.contentWindow.document;
+  doc.open();
+  doc.write(`<!DOCTYPE html><html><head><style>
+    *{margin:0;padding:0;}
+    body{background:transparent;overflow:hidden;}
+  </style></head><body>${innerHTML}</body></html>`);
+  doc.close();
+}
+
+// Bloques de anuncio disponibles (tal como los diste)
+const AD_BANNERS = {
+  banner300x250: {
+    w:300, h:250,
+    html: `<script>atOptions={key:'d8bf2b16649b9f17c689cf7368282f85',format:'iframe',height:250,width:300,params:{}};<\/script>
+           <script src="https://www.highperformanceformat.com/d8bf2b16649b9f17c689cf7368282f85/invoke.js"><\/script>`
+  },
+  banner468x60: {
+    w:468, h:60,
+    html: `<script>atOptions={key:'960e0ab52515919a878922af2ad5715f',format:'iframe',height:60,width:468,params:{}};<\/script>
+           <script src="https://www.highperformanceformat.com/960e0ab52515919a878922af2ad5715f/invoke.js"><\/script>`
+  },
+  banner160x300: {
+    w:160, h:300,
+    html: `<script>atOptions={key:'5093d26a3d5cba4bfbb4c51bef60fb10',format:'iframe',height:300,width:160,params:{}};<\/script>
+           <script src="https://www.highperformanceformat.com/5093d26a3d5cba4bfbb4c51bef60fb10/invoke.js"><\/script>`
+  },
+  banner160x600: {
+    w:160, h:600,
+    html: `<script>atOptions={key:'d5d00e5d40cf62c606829002797f971c',format:'iframe',height:600,width:160,params:{}};<\/script>
+           <script src="https://www.highperformanceformat.com/d5d00e5d40cf62c606829002797f971c/invoke.js"><\/script>`
+  },
+  banner728x90: {
+    w:728, h:90,
+    html: `<script>atOptions={key:'c5307788240c454c68c8c33e63419d2f',format:'iframe',height:90,width:728,params:{}};<\/script>
+           <script src="https://www.highperformanceformat.com/c5307788240c454c68c8c33e63419d2f/invoke.js"><\/script>`
+  },
+  banner320x50: {
+    w:320, h:50,
+    html: `<script>atOptions={key:'b20e74038826b9191d385ae251395144',format:'iframe',height:50,width:320,params:{}};<\/script>
+           <script src="https://www.highperformanceformat.com/b20e74038826b9191d385ae251395144/invoke.js"><\/script>`
+  }
+};
+
+// Anuncio de contenedor + su script asociado (formato "native/container")
+const AD_CONTAINER_HTML = `
+  <div id="container-934211ecfdb9be1f6e390d9b02c34867"></div>
+  <script async="async" data-cfasync="false" src="https://pl30128502.effectivecpmnetwork.com/934211ecfdb9be1f6e390d9b02c34867/invoke.js"><\/script>
+`;
+
+// Scripts "autoinyectables" de la red (no necesitan contenedor propio)
+const AD_SCRIPT_A = `<script src="https://pl30128503.effectivecpmnetwork.com/3d/83/41/3d83419eaf91b34808a8aa2d20daf013.js"><\/script>`;
+const AD_SCRIPT_B = `<script src="https://pl30128510.effectivecpmnetwork.com/9b/b4/fe/9bb4fe75f6f876fc728809f8c1ddb4dd.js"><\/script>`;
+
+// Link directo (smartlink) de effectivecpmnetwork: se muestra como
+// banner de texto clicable, NO como popup automático.
+const AD_DIRECT_LINK = "https://www.effectivecpmnetwork.com/f7qrpt3x?key=9ba89c90075185e5bbf19942258b0bef";
+
+// Todas las pantallas muestran el set COMPLETO de anuncios
+// (así siempre están los que más generan, en las 5 páginas)
+function renderAdsForStep(currentStep){
+  createAdSlot('ad-top-left',    AD_BANNERS.banner468x60.w,  AD_BANNERS.banner468x60.h,  AD_BANNERS.banner468x60.html);
+  createAdSlot('ad-top-center',  AD_BANNERS.banner728x90.w,  AD_BANNERS.banner728x90.h,  AD_BANNERS.banner728x90.html);
+  createAdSlot('ad-top-right',   AD_BANNERS.banner320x50.w,  AD_BANNERS.banner320x50.h,  AD_BANNERS.banner320x50.html);
+  createAdSlot('ad-mid-left',    AD_BANNERS.banner160x300.w, AD_BANNERS.banner160x300.h, AD_BANNERS.banner160x300.html);
+  createAdSlot('ad-mid-right',   AD_BANNERS.banner160x600.w, AD_BANNERS.banner160x600.h, AD_BANNERS.banner160x600.html);
+  createAdSlot('ad-bottom-left', AD_BANNERS.banner300x250.w, AD_BANNERS.banner300x250.h, AD_BANNERS.banner300x250.html);
+  createAdSlot('ad-bottom-center', 300, 100, AD_CONTAINER_HTML);
+  createAdSlot('ad-bottom-right', 300, 40,
+    `<a href="${AD_DIRECT_LINK}" target="_blank" rel="noopener"
+        style="display:flex;align-items:center;justify-content:center;
+               width:100%;height:100%;background:#111;color:#33ff66;
+               font-family:sans-serif;font-size:12px;text-decoration:none;">
+       Publicidad
+     </a>`);
+
+  // Scripts autoinyectables de la red: no necesitan recuadro visible propio
+  createAdSlot('ad-hidden', 1, 1, AD_SCRIPT_A);
+  createAdSlot('ad-hidden', 1, 1, AD_SCRIPT_B);
+}
+renderAdsForStep(step);
+
+/* =========================================================
+   ANIMACIONES RETRO ESTILO PROTECTOR DE PANTALLA
+   Se elige una animación distinta según el número de pantalla (1-5)
+   ========================================================= */
+const canvas = document.getElementById('stage');
+const ctx = canvas.getContext('2d');
+let W, H;
+function resize(){
+  W = canvas.width  = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+let rafId;
+function loop(fn){
+  function frame(){
+    fn();
+    rafId = requestAnimationFrame(frame);
+  }
+  frame();
+}
+
+/* ---- 1. LOGO REBOTANDO (estilo DVD) ---- */
+function animBouncingLogo(){
+  const colors = ['#33ff66','#ff2ec4','#22e0ff','#ffb000','#ff5533'];
+  let colorIdx = 0;
+  const box = { w: 220, h: 90, x: W/2, y: H/2, vx: 1.3, vy: 1.0 };
+  const text = "RETRO";
+  loop(()=>{
+    ctx.fillStyle = 'rgba(7,10,8,1)';
+    ctx.fillRect(0,0,W,H);
+
+    box.x += box.vx;
+    box.y += box.vy;
+    let bounced = false;
+    if (box.x - box.w/2 <= 0 || box.x + box.w/2 >= W){ box.vx *= -1; bounced = true; }
+    if (box.y - box.h/2 <= 0 || box.y + box.h/2 >= H){ box.vy *= -1; bounced = true; }
+    if (bounced) colorIdx = (colorIdx+1) % colors.length;
+
+    ctx.save();
+    ctx.translate(box.x, box.y);
+    ctx.font = "bold 46px 'VT323', monospace";
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.shadowColor = colors[colorIdx];
+    ctx.shadowBlur = 25;
+    ctx.strokeStyle = colors[colorIdx];
+    ctx.lineWidth = 3;
+    ctx.strokeRect(-box.w/2, -box.h/2, box.w, box.h);
+    ctx.fillStyle = colors[colorIdx];
+    ctx.fillText(text, 0, 0);
+    ctx.restore();
+  });
+}
+
+/* ---- 2. STARFIELD / WARP ---- */
+function animStarfield(){
+  const stars = [];
+  const NUM = 400;
+  for (let i=0;i<NUM;i++){
+    stars.push({
+      x: (Math.random()-0.5) * W,
+      y: (Math.random()-0.5) * H,
+      z: Math.random() * W
+    });
+  }
+  loop(()=>{
+    ctx.fillStyle = 'rgba(7,10,8,0.4)';
+    ctx.fillRect(0,0,W,H);
+    ctx.save();
+    ctx.translate(W/2, H/2);
+    for (const s of stars){
+      s.z -= 2;
+      if (s.z <= 0){
+        s.x = (Math.random()-0.5) * W;
+        s.y = (Math.random()-0.5) * H;
+        s.z = W;
+      }
+      const k = 128 / s.z;
+      const px = s.x * k;
+      const py = s.y * k;
+      const size = (1 - s.z / W) * 3;
+      const alpha = 1 - s.z / W;
+      ctx.fillStyle = `rgba(51,255,102,${alpha})`;
+      ctx.beginPath();
+      ctx.arc(px, py, Math.max(size,0.5), 0, Math.PI*2);
+      ctx.fill();
+    }
+    ctx.restore();
+  });
+}
+
+/* ---- 3. LLUVIA ESTILO MATRIX ---- */
+function animMatrixRain(){
+  const fontSize = 20;
+  const cols = Math.floor(W / fontSize);
+  const drops = new Array(cols).fill(0).map(()=> Math.random() * H / fontSize);
+  const chars = "アイウエオカキクケコ0123456789ABCDEFｸﾞ";
+  loop(()=>{
+    ctx.fillStyle = 'rgba(7,10,8,0.15)';
+    ctx.fillRect(0,0,W,H);
+    ctx.font = fontSize + "px 'VT323', monospace";
+    for (let i=0;i<cols;i++){
+      const ch = chars[Math.floor(Math.random()*chars.length)];
+      const x = i * fontSize;
+      const y = drops[i] * fontSize;
+      ctx.fillStyle = Math.random() < 0.08 ? '#eafff0' : '#33ff66';
+      ctx.fillText(ch, x, y);
+      if (y > H && Math.random() > 0.975) drops[i] = 0;
+      drops[i] += 0.4;
+    }
+  });
+}
+
+/* ---- 4. GRID / TUNEL RETRO (estilo synthwave) ---- */
+function animGridTunnel(){
+  let offset = 0;
+  loop(()=>{
+    ctx.fillStyle = '#070a08';
+    ctx.fillRect(0,0,W,H);
+
+    const horizon = H * 0.45;
+
+    // sol retro
+    const sunR = Math.min(W,H) * 0.16;
+    const grad = ctx.createLinearGradient(0, horizon - sunR, 0, horizon + sunR);
+    grad.addColorStop(0, '#ffb000');
+    grad.addColorStop(1, '#ff2ec4');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(W/2, horizon, sunR, 0, Math.PI*2);
+    ctx.fill();
+
+    // horizonte
+    ctx.strokeStyle = '#22e0ff';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(0, horizon);
+    ctx.lineTo(W, horizon);
+    ctx.stroke();
+
+    // lineas verticales de fuga
+    ctx.strokeStyle = 'rgba(255,46,196,0.7)';
+    const vLines = 16;
+    for (let i=0;i<=vLines;i++){
+      const xTop = W/2 + (i - vLines/2) * (W/vLines) * 0.15;
+      const xBottom = W/2 + (i - vLines/2) * (W/vLines) * 2.2;
+      ctx.beginPath();
+      ctx.moveTo(xTop, horizon);
+      ctx.lineTo(xBottom, H);
+      ctx.stroke();
+    }
+
+    // lineas horizontales moviendose (efecto de avance)
+    offset = (offset + 1.5) % 60;
+    ctx.strokeStyle = 'rgba(34,224,255,0.5)';
+    for (let y = horizon; y < H; y += 1){
+      const t = (y - horizon) / (H - horizon);
+      const spacing = 8 + t*t*60;
+      if (((y - horizon + offset) % spacing) < 1.6){
+        ctx.beginPath();
+        ctx.moveTo(0,y);
+        ctx.lineTo(W,y);
+        ctx.stroke();
+      }
+    }
+  });
+}
+
+/* ---- 5. PLASMA / LAVA RETRO ---- */
+function animPlasma(){
+  const scale = 0.35; // resolucion reducida para rendimiento
+  const pw = Math.floor(W*scale), ph = Math.floor(H*scale);
+  const off = document.createElement('canvas');
+  off.width = pw; off.height = ph;
+  const octx = off.getContext('2d');
+  const imgData = octx.createImageData(pw, ph);
+  let t = 0;
+  loop(()=>{
+    t += 0.015;
+    for (let y=0; y<ph; y++){
+      for (let x=0; x<pw; x++){
+        const idx = (y*pw + x)*4;
+        const v = Math.sin(x*0.15 + t) +
+                   Math.sin((y*0.15 + t) * 1.3) +
+                   Math.sin((x*0.1 + y*0.1 + t) * 1.7) +
+                   Math.sin(Math.sqrt(x*x+y*y)*0.08 - t);
+        const c = (v + 4) / 8; // 0..1
+        const r = Math.floor(128 + 127*Math.sin(3.14*c + 0));
+        const g = Math.floor(128 + 127*Math.sin(3.14*c + 2));
+        const b = Math.floor(128 + 127*Math.sin(3.14*c + 4));
+        imgData.data[idx]   = r*0.5;
+        imgData.data[idx+1] = g;
+        imgData.data[idx+2] = b*0.7 + 40;
+        imgData.data[idx+3] = 255;
+      }
+    }
+    octx.putImageData(imgData, 0, 0);
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(off, 0, 0, pw, ph, 0, 0, W, H);
+  });
+}
+
+/* ---- Selección de animación según la pantalla actual ---- */
+const animations = [animBouncingLogo, animStarfield, animMatrixRain, animGridTunnel, animPlasma];
+animations[(step-1) % animations.length]();
+</script>
+</body>
+</html>
